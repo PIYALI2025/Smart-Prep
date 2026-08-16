@@ -6,11 +6,13 @@ FastAPI application entry-point for Smart-Prep backend.
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
 from datetime import datetime, timedelta
 from jose import jwt
 
 from app.core.config import settings
 from app.attendance.router import router as attendance_router
+from app.auth.router import router as auth_router
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -52,3 +54,9 @@ def generate_test_token(user_id: str = "test-teacher-uuid"):
     to_encode = {"sub": user_id, "exp": expire}
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return {"access_token": encoded_jwt, "token_type": "bearer"}
+
+app.include_router(auth_router)
+
+@app.get("/")
+async def root():
+    return {"message": "Smart-Prep API is running"}
