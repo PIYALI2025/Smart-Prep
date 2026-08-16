@@ -8,6 +8,8 @@ Validates a Bearer JWT and returns the current user id (UUID string).
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
+from app.auth.mongo_db import users_collection
+from bson import ObjectId
 
 from app.core.config import settings
 
@@ -51,18 +53,53 @@ def get_current_user_id(
         )
 
 
-def get_optional_user_id(
-    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
-) -> str | None:
-    """Same as get_current_user_id but returns None instead of raising."""
-    if credentials is None:
-        return None
-    try:
-        payload = jwt.decode(
-            credentials.credentials,
-            settings.SECRET_KEY,
-            algorithms=[settings.ALGORITHM],
+# ---------------------------------------------------------
+# STUDENT AUTHORIZATION
+# ---------------------------------------------------------
+
+async def get_current_student(
+    user_id: str = Depends(get_current_user_id)
+):
+    user = await users_collection.find_one({
+        "_id": ObjectId(user_id)
+    })
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
         )
-        return payload.get("sub")
-    except JWTError:
-        return None
+
+    if user.get("role") != "student":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Student access required"
+        )
+
+    return user
+
+
+# ---------------------------------------------------------
+# MENTOR AUTHORIZATION
+# ---------------------------------------------------------
+
+async def get_current_mentor(
+    user_id: str = Depends(get_current_user_id)
+):
+    user = await users_collection.find_one({
+        "_id": ObjectId(user_id)
+    })
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+
+    if user.get("role") != "mentor":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Mentor access required"
+        )
+
+    return user

@@ -6,6 +6,8 @@ FastAPI application entry-point for Smart-Prep backend.
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from app.auth.router import router as auth_router
+
 
 from app.core.config import settings
 from app.attendance.router import router as attendance_router
@@ -38,3 +40,9 @@ app.include_router(attendance_router, prefix="/api/v1")
 @app.get("/health", tags=["Health"])
 def health_check():
     return {"status": "ok", "version": settings.APP_VERSION}
+
+app.include_router(auth_router)
+
+@app.get("/")
+async def root():
+    return {"message": "Smart-Prep API is running"}
