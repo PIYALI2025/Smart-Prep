@@ -46,9 +46,9 @@ def upgrade() -> None:
 
     # ── 2. weekly_routine ────────────────────────────────────────────────────
     day_enum = postgresql.ENUM(
-        "monday","tuesday","wednesday","thursday","friday","saturday","sunday",
+        "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
         name="dayofweek",
-        create_type=True,
+        create_type=False
     )
     day_enum.create(op.get_bind(), checkfirst=True)
 
@@ -56,9 +56,9 @@ def upgrade() -> None:
         "weekly_routine",
         sa.Column("id",           postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column("class_id",     sa.String(64),  nullable=False),
-        sa.Column("day_of_week",  sa.Enum("monday","tuesday","wednesday","thursday",
-                                           "friday","saturday","sunday",
-                                           name="dayofweek"),
+        sa.Column("day_of_week",  postgresql.ENUM("monday", "tuesday", "wednesday", "thursday",
+                                                  "friday", "saturday", "sunday",
+                                                  name="dayofweek", create_type=False),
                   nullable=False),
         sa.Column("period_id",    postgresql.UUID(as_uuid=True),
                   sa.ForeignKey("timetable_periods.id", ondelete="CASCADE"),
@@ -79,9 +79,9 @@ def upgrade() -> None:
         "holidays",
         sa.Column("id",          postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column("class_id",    sa.String(64),  nullable=False),
-        sa.Column("day_of_week", sa.Enum("monday","tuesday","wednesday","thursday",
-                                          "friday","saturday","sunday",
-                                          name="dayofweek"),
+        sa.Column("day_of_week", postgresql.ENUM("monday", "tuesday", "wednesday", "thursday",
+                                                  "friday", "saturday", "sunday",
+                                                  name="dayofweek", create_type=False),
                   nullable=False),
         sa.Column("description", sa.String(256), nullable=True),
         sa.Column("created_at",  sa.DateTime(),  nullable=False,
@@ -107,7 +107,7 @@ def upgrade() -> None:
     mark_enum = postgresql.ENUM(
         "present", "absent", "off_day",
         name="attendancemark",
-        create_type=True,
+        create_type=False
     )
     mark_enum.create(op.get_bind(), checkfirst=True)
 
@@ -120,8 +120,8 @@ def upgrade() -> None:
                   sa.ForeignKey("timetable_periods.id", ondelete="CASCADE"),
                   nullable=False),
         sa.Column("date",       sa.Date(),       nullable=False),
-        sa.Column("mark",       sa.Enum("present","absent","off_day",
-                                         name="attendancemark"),
+        sa.Column("mark",       postgresql.ENUM("present", "absent", "off_day",
+                                                 name="attendancemark", create_type=False),
                   nullable=False),
         sa.Column("marked_by",  sa.String(64),  nullable=True),
         sa.Column("notes",      sa.String(256), nullable=True),
