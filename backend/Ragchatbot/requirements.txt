@@ -1,0 +1,21 @@
+# Web Framework & Server
+fastapi
+uvicorn
+python-multipart
+
+# AI / LLM SDKs
+groq
+google-generativeai
+
+# RAG Engine & Vector DB
+chromadb
+langchain
+langchain-community
+langchain-text-splitters
+sentence-transformers
+pypdf
+
+# Utilities
+python-dotenv
+streamlit
+streamlit skills
