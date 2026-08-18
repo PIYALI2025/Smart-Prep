@@ -204,7 +204,7 @@ with st.sidebar:
         "💬 AI Chat", 
         "📝 15 MCQ Quiz", 
         "✍️ Simple Written Exam", 
-        "⏱️ Timed Written Exam"
+        # "⏱️ Timed Written Exam"
     ])
 
 # -----------------------------------------------------------------------------
@@ -353,94 +353,94 @@ elif mode == "✍️ Simple Written Exam":
         st.subheader("📋 Exam Evaluation & Marks Breakdown")
         st.markdown(st.session_state.simple_results)
 
-# -----------------------------------------------------------------------------
-# Mode 4: Timed Written Exam Mode
-# -----------------------------------------------------------------------------
-elif mode == "⏱️ Timed Written Exam":
-    st.title("⏱️ Timed Written Exam System")
-    st.caption(f"Document: **{st.session_state.current_file}**")
+# # -----------------------------------------------------------------------------
+# # Mode 4: Timed Written Exam Mode
+# # -----------------------------------------------------------------------------
+# elif mode == "⏱️ Timed Written Exam":
+#     st.title("⏱️ Timed Written Exam System")
+#     st.caption(f"Document: **{st.session_state.current_file}**")
 
-    if "exam_submitted" not in st.session_state:
-        st.session_state.exam_submitted = False
-    if "exam_results" not in st.session_state:
-        st.session_state.exam_results = None
+#     if "exam_submitted" not in st.session_state:
+#         st.session_state.exam_submitted = False
+#     if "exam_results" not in st.session_state:
+#         st.session_state.exam_results = None
 
-    if not st.session_state.get("exam_questions"):
-        col1, col2 = st.columns(2)
-        with col1:
-            exam_duration_mins = st.slider("Select Duration (Minutes):", min_value=1, max_value=30, value=3, key="timed_dur")
-        with col2:
-            num_questions = st.slider("Number of Questions:", min_value=1, max_value=10, value=3, key="timed_num_q")
+#     if not st.session_state.get("exam_questions"):
+#         col1, col2 = st.columns(2)
+#         with col1:
+#             exam_duration_mins = st.slider("Select Duration (Minutes):", min_value=1, max_value=30, value=3, key="timed_dur")
+#         with col2:
+#             num_questions = st.slider("Number of Questions:", min_value=1, max_value=10, value=3, key="timed_num_q")
 
-        if st.button("🚀 Start Timed Exam"):
-            if not st.session_state.active_vector_db:
-                st.error("⚠️ Please upload a PDF first to start an exam.")
-            else:
-                with st.spinner("Generating exam questions..."):
-                    st.session_state.exam_questions = generate_written_exam(
-                        st.session_state.active_vector_db, 
-                        num_questions=num_questions
-                    )
-                    st.session_state.exam_start_time = time.time()
-                    st.session_state.exam_duration_secs = exam_duration_mins * 60
-                    st.session_state.exam_submitted = False
-                    st.session_state.exam_results = None
-                    st.rerun()
+#         if st.button("🚀 Start Timed Exam"):
+#             if not st.session_state.active_vector_db:
+#                 st.error("⚠️ Please upload a PDF first to start an exam.")
+#             else:
+#                 with st.spinner("Generating exam questions..."):
+#                     st.session_state.exam_questions = generate_written_exam(
+#                         st.session_state.active_vector_db, 
+#                         num_questions=num_questions
+#                     )
+#                     st.session_state.exam_start_time = time.time()
+#                     st.session_state.exam_duration_secs = exam_duration_mins * 60
+#                     st.session_state.exam_submitted = False
+#                     st.session_state.exam_results = None
+#                     st.rerun()
 
-    if st.session_state.get("exam_questions") and not st.session_state.exam_submitted:
-        elapsed = time.time() - st.session_state.exam_start_time
-        remaining = int(st.session_state.exam_duration_secs - elapsed)
+#     if st.session_state.get("exam_questions") and not st.session_state.exam_submitted:
+#         elapsed = time.time() - st.session_state.exam_start_time
+#         remaining = int(st.session_state.exam_duration_secs - elapsed)
 
-        timer_box = st.empty()
+#         timer_box = st.empty()
 
-        if remaining > 0:
-            st_autorefresh(interval=1000, key="exam_timer_refresher")
-            mins, secs = divmod(remaining, 60)
-            timer_box.warning(f"⏳ **Time Remaining:** `{mins:02d}:{secs:02d}`")
-        else:
-            timer_box.error("⏰ **Time is UP! Auto-submitting your exam now...**")
-            st.session_state.exam_submitted = True
-            st.rerun()
+#         if remaining > 0:
+#             st_autorefresh(interval=1000, key="exam_timer_refresher")
+#             mins, secs = divmod(remaining, 60)
+#             timer_box.warning(f"⏳ **Time Remaining:** `{mins:02d}:{secs:02d}`")
+#         else:
+#             timer_box.error("⏰ **Time is UP! Auto-submitting your exam now...**")
+#             st.session_state.exam_submitted = True
+#             st.rerun()
 
-        with st.form("timed_exam_form"):
-            for q in st.session_state.exam_questions:
-                q_id = q["id"]
-                st.markdown(f"**Q{q_id}: {q['question']}** ({q['max_marks']} Marks)")
-                st.text_area(
-                    f"Your answer for Q{q_id}:",
-                    key=f"written_ans_{q_id}",
-                    height=120
-                )
-                st.divider()
+#         with st.form("timed_exam_form"):
+#             for q in st.session_state.exam_questions:
+#                 q_id = q["id"]
+#                 st.markdown(f"**Q{q_id}: {q['question']}** ({q['max_marks']} Marks)")
+#                 st.text_area(
+#                     f"Your answer for Q{q_id}:",
+#                     key=f"written_ans_{q_id}",
+#                     height=120
+#                 )
+#                 st.divider()
 
-            submit_btn = st.form_submit_button("Submit Exam Now", type="primary", use_container_width=True)
-            if submit_btn:
-                st.session_state.exam_submitted = True
-                st.rerun()
+#             submit_btn = st.form_submit_button("Submit Exam Now", type="primary", use_container_width=True)
+#             if submit_btn:
+#                 st.session_state.exam_submitted = True
+#                 st.rerun()
 
-    if st.session_state.exam_submitted:
-        if not st.session_state.exam_results:
-            collected_answers = {}
-            for q in st.session_state.get("exam_questions", []):
-                q_id = q["id"]
-                ans_key = f"written_ans_{q_id}"
-                collected_answers[q_id] = st.session_state.get(ans_key, "No answer provided.")
+#     if st.session_state.exam_submitted:
+#         if not st.session_state.exam_results:
+#             collected_answers = {}
+#             for q in st.session_state.get("exam_questions", []):
+#                 q_id = q["id"]
+#                 ans_key = f"written_ans_{q_id}"
+#                 collected_answers[q_id] = st.session_state.get(ans_key, "No answer provided.")
 
-            with st.status("🧠 AI Examiner is grading your responses...", expanded=True) as status:
-                st.write("📥 Collecting submitted answers...")
-                st.write("🔍 Evaluating with LLM...")
+#             with st.status("🧠 AI Examiner is grading your responses...", expanded=True) as status:
+#                 st.write("📥 Collecting submitted answers...")
+#                 st.write("🔍 Evaluating with LLM...")
                 
-                grading = grade_written_exam(st.session_state.exam_questions, collected_answers)
-                st.session_state.exam_results = grading
-                status.update(label="✅ Evaluation Complete!", state="complete", expanded=False)
+#                 grading = grade_written_exam(st.session_state.exam_questions, collected_answers)
+#                 st.session_state.exam_results = grading
+#                 status.update(label="✅ Evaluation Complete!", state="complete", expanded=False)
 
-        if st.session_state.exam_results:
-            st.subheader("📋 Exam Evaluation & Marks Breakdown")
-            st.markdown(st.session_state.exam_results)
+#         if st.session_state.exam_results:
+#             st.subheader("📋 Exam Evaluation & Marks Breakdown")
+#             st.markdown(st.session_state.exam_results)
             
-            st.divider()
-            if st.button("🔄 Take Another Exam"):
-                st.session_state.exam_questions = None
-                st.session_state.exam_submitted = False
-                st.session_state.exam_results = None
-                st.rerun()# import time
+#             st.divider()
+#             if st.button("🔄 Take Another Exam"):
+#                 st.session_state.exam_questions = None
+#                 st.session_state.exam_submitted = False
+#                 st.session_state.exam_results = None
+#                 st.rerun()# import time
