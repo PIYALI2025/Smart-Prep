@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.attendance.models import (
     TimetablePeriod, WeeklyRoutine, Holiday,
     ExtraOffDay, AttendanceRecord, AttendanceThreshold,
+    LecturePlanEntry, GapRecord,
     DayOfWeek, AttendanceMark,
 )
 from app.attendance import schemas
@@ -423,3 +424,460 @@ def get_threshold_map(db: Session, class_id: str) -> tuple[float, dict]:
         else:
             subject_map[t.subject_name] = t.threshold
     return global_threshold, subject_map
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 1.5  Lecture Plan CRUD
+# ══════════════════════════════════════════════════════════════════════════════
+
+def create_lecture_plan(db: Session, data: schemas.LecturePlanCreate) -> LecturePlanEntry:
+    entry = LecturePlanEntry(
+        class_id       = data.class_id,
+        section        = data.section,
+        subject_name   = data.subject_name,
+        period_id      = data.period_id,
+        date           = data.date,
+        teacher_id     = data.teacher_id,
+        topic          = data.topic,
+        subtopics      = data.subtopics,
+        exam_weightage = data.exam_weightage,
+    )
+    db.add(entry)
+    try:
+        db.commit()
+        db.refresh(entry)
+    except Exception:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A lecture plan already exists for this class/section/date/period.",
+        )
+    return entry
+
+
+def get_lecture_plan(db: Session, plan_id: uuid.UUID) -> LecturePlanEntry:
+    plan = db.query(LecturePlanEntry).get(plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Lecture plan entry not found.")
+    return plan
+
+
+def update_lecture_plan(
+    db: Session, plan_id: uuid.UUID, data: schemas.LecturePlanUpdate
+) -> LecturePlanEntry:
+    plan = get_lecture_plan(db, plan_id)
+    for field, value in data.model_dump(exclude_unset=True).items():
+        setattr(plan, field, value)
+    db.commit()
+    db.refresh(plan)
+    return plan
+
+
+def list_lecture_plans(
+    db: Session,
+    class_id: str,
+    section: str = "A",
+    target_date: Optional[date] = None,
+) -> List[LecturePlanEntry]:
+    q = db.query(LecturePlanEntry).filter(
+        LecturePlanEntry.class_id == class_id,
+        LecturePlanEntry.section == section,
+    )
+    if target_date:
+        q = q.filter(LecturePlanEntry.date == target_date)
+    return q.order_by(LecturePlanEntry.date, LecturePlanEntry.period_id).all()
+
+
+def find_lecture_plan_for_session(
+    db: Session,
+    class_id: str,
+    section: str,
+    target_date: date,
+    period_id: uuid.UUID,
+) -> Optional[LecturePlanEntry]:
+    """Look up the lecture plan for a specific class/section/date/period."""
+    return (
+        db.query(LecturePlanEntry)
+        .filter(
+            LecturePlanEntry.class_id  == class_id,
+            LecturePlanEntry.section   == section,
+            LecturePlanEntry.date      == target_date,
+            LecturePlanEntry.period_id == period_id,
+        )
+        .first()
+    )
+
+
+def delete_lecture_plan(db: Session, plan_id: uuid.UUID) -> None:
+    plan = get_lecture_plan(db, plan_id)
+    db.delete(plan)
+    db.commit()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 1.6  Roster Context Lookup
+# ══════════════════════════════════════════════════════════════════════════════
+
+def get_roster_context(
+    db: Session,
+    class_id: str,
+    section: str,
+    target_date: date,
+    period_id: uuid.UUID,
+    student_ids: List[str],
+) -> dict:
+    """
+    Build roster data for a given session slot: session info + per-student status.
+    student_ids should be provided by the caller (e.g. from a class roster service).
+    """
+    # Lecture plan context
+    lecture_plan = find_lecture_plan_for_session(db, class_id, section, target_date, period_id)
+    period = db.query(TimetablePeriod).get(period_id)
+
+    # Existing attendance records for this slot
+    existing_records = (
+        db.query(AttendanceRecord)
+        .filter(
+            AttendanceRecord.class_id  == class_id,
+            AttendanceRecord.date      == target_date,
+            AttendanceRecord.period_id == period_id,
+        )
+        .all()
+    )
+    record_map = {r.student_id: r for r in existing_records}
+
+    students = []
+    for sid in student_ids:
+        rec = record_map.get(sid)
+        students.append({
+            "student_id": sid,
+            "name": None,
+            "status": rec.mark.value if rec else "unmarked",
+            "record_id": rec.id if rec else None,
+            "notes": rec.notes if rec else None,
+        })
+
+    session_info = {
+        "class_id": class_id,
+        "section": section,
+        "date": target_date,
+        "period_id": period_id,
+        "period_name": period.name if period else None,
+        "subject_name": lecture_plan.subject_name if lecture_plan else None,
+        "lecture_plan": lecture_plan,
+    }
+
+    return {
+        "session_info": session_info,
+        "total_students": len(student_ids),
+        "students": students,
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 1.7  Bulk Attendance Marking
+# ══════════════════════════════════════════════════════════════════════════════
+
+def bulk_mark_attendance(
+    db: Session,
+    data: schemas.BulkMarkAttendanceRequest,
+    marked_by: str,
+) -> dict:
+    """
+    Upsert attendance for every student in data.records.
+    Returns summary dict including counts and gap creation results.
+    """
+    from app.attendance.gap_service import create_gaps_for_absences
+
+    lecture_plan = find_lecture_plan_for_session(
+        db, data.class_id, data.section, data.date, data.period_id
+    )
+
+    # Validate unplanned rule
+    if not lecture_plan and not data.is_unplanned:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "No lecture plan found for this class/section/date/period. "
+                "Set is_unplanned=true to mark attendance for an unplanned/free period."
+            ),
+        )
+
+    # Determine subject from lecture plan or request
+    subject_name = (
+        lecture_plan.subject_name
+        if lecture_plan
+        else (data.subject_name or "Unplanned")
+    )
+
+    present_count = 0
+    absent_count  = 0
+    late_count    = 0
+    absent_student_ids: List[str] = []
+
+    for item in data.records:
+        # Upsert: find existing or create new
+        existing = (
+            db.query(AttendanceRecord)
+            .filter(
+                AttendanceRecord.class_id   == data.class_id,
+                AttendanceRecord.student_id == item.student_id,
+                AttendanceRecord.date       == data.date,
+                AttendanceRecord.period_id  == data.period_id,
+            )
+            .first()
+        )
+
+        mark_enum = AttendanceMark(item.status)
+
+        if existing:
+            existing.mark      = mark_enum
+            existing.marked_by = marked_by
+            existing.notes     = item.notes
+        else:
+            record = AttendanceRecord(
+                class_id   = data.class_id,
+                student_id = item.student_id,
+                period_id  = data.period_id,
+                date       = data.date,
+                mark       = mark_enum,
+                marked_by  = marked_by,
+                notes      = item.notes,
+            )
+            db.add(record)
+
+        if item.status == "present":
+            present_count += 1
+        elif item.status == "absent":
+            absent_count += 1
+            absent_student_ids.append(item.student_id)
+        elif item.status == "late":
+            late_count += 1
+
+    db.commit()
+
+    # Auto-create gap records for absent students
+    gaps = create_gaps_for_absences(
+        db          = db,
+        class_id    = data.class_id,
+        session_date= data.date,
+        period_id   = data.period_id,
+        absent_student_ids = absent_student_ids,
+        lecture_plan       = lecture_plan,
+    )
+
+    return {
+        "class_id":        data.class_id,
+        "section":         data.section,
+        "date":            data.date,
+        "period_id":       data.period_id,
+        "total_marked":    len(data.records),
+        "present_count":   present_count,
+        "absent_count":    absent_count,
+        "late_count":      late_count,
+        "absent_students": absent_student_ids,
+        "gaps_created":    len(gaps),
+        "lecture_plan_id": lecture_plan.id if lecture_plan else None,
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 1.8  Student History
+# ══════════════════════════════════════════════════════════════════════════════
+
+def get_student_history(
+    db: Session,
+    student_id: str,
+    class_id: str,
+    subject_name: Optional[str] = None,
+    from_date: Optional[date] = None,
+    to_date: Optional[date] = None,
+) -> List[dict]:
+    """
+    Return attendance history for a student with period and lecture plan context.
+    """
+    q = (
+        db.query(AttendanceRecord)
+        .options(joinedload(AttendanceRecord.period))
+        .filter(
+            AttendanceRecord.student_id == student_id,
+            AttendanceRecord.class_id   == class_id,
+        )
+    )
+    if from_date:
+        q = q.filter(AttendanceRecord.date >= from_date)
+    if to_date:
+        q = q.filter(AttendanceRecord.date <= to_date)
+
+    records = q.order_by(AttendanceRecord.date.desc(), AttendanceRecord.period_id).all()
+
+    history_items = []
+    for rec in records:
+        # Find matching lecture plan for topic context
+        lp = find_lecture_plan_for_session(
+            db, class_id, "A", rec.date, rec.period_id
+        )
+
+        # If filtering by subject and no match, try routine fallback
+        actual_subject = lp.subject_name if lp else "Unassigned"
+        if subject_name and actual_subject.lower() != subject_name.lower():
+            # Check weekly routine for subject
+            routine = (
+                db.query(WeeklyRoutine)
+                .filter(
+                    WeeklyRoutine.class_id  == class_id,
+                    WeeklyRoutine.period_id == rec.period_id,
+                )
+                .first()
+            )
+            actual_subject = routine.subject_name if routine else "Unassigned"
+            if actual_subject.lower() != subject_name.lower():
+                continue
+
+        history_items.append({
+            "id":           rec.id,
+            "date":         rec.date,
+            "period_id":    rec.period_id,
+            "period_name":  rec.period.name if rec.period else None,
+            "subject_name": actual_subject,
+            "topic":        lp.topic if lp else None,
+            "mark":         rec.mark.value,
+            "marked_by":    rec.marked_by,
+            "notes":        rec.notes,
+        })
+
+    return history_items
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 1.9  Class Summary
+# ══════════════════════════════════════════════════════════════════════════════
+
+def get_class_summary(
+    db: Session,
+    class_id: str,
+    section: str = "A",
+    student_ids: Optional[List[str]] = None,
+) -> dict:
+    """
+    Calculate per-subject attendance percentages for all students in a class.
+    Returns data shaped for ClassAttendanceSummaryResponse.
+    """
+    global_threshold, subject_threshold_map = get_threshold_map(db, class_id)
+
+    # Get all attendance records for the class
+    q = db.query(AttendanceRecord).filter(
+        AttendanceRecord.class_id == class_id,
+    )
+    if student_ids:
+        q = q.filter(AttendanceRecord.student_id.in_(student_ids))
+
+    all_records = q.all()
+
+    # Group by student
+    student_records: dict[str, list] = {}
+    for rec in all_records:
+        student_records.setdefault(rec.student_id, []).append(rec)
+
+    students_summary = []
+    for sid, records in student_records.items():
+        # Per-subject breakdown
+        subject_data: dict[str, dict] = {}
+        total_attended = 0
+        total_periods  = 0
+
+        for rec in records:
+            if rec.mark == AttendanceMark.OFF_DAY:
+                continue
+
+            # Try lecture plan first, then routine fallback for subject
+            lp = find_lecture_plan_for_session(db, class_id, section, rec.date, rec.period_id)
+            subj = lp.subject_name if lp else None
+
+            if not subj:
+                routine = (
+                    db.query(WeeklyRoutine)
+                    .filter(
+                        WeeklyRoutine.class_id  == class_id,
+                        WeeklyRoutine.period_id == rec.period_id,
+                    )
+                    .first()
+                )
+                subj = routine.subject_name if routine else "Unassigned"
+
+            if subj not in subject_data:
+                subject_data[subj] = {"attended": 0, "total": 0}
+
+            subject_data[subj]["total"] += 1
+            total_periods += 1
+
+            if rec.mark in (AttendanceMark.PRESENT, AttendanceMark.LATE):
+                subject_data[subj]["attended"] += 1
+                total_attended += 1
+
+        subjects = []
+        has_warning = False
+        for subj_name, counts in subject_data.items():
+            threshold = subject_threshold_map.get(subj_name, global_threshold)
+            pct = round((counts["attended"] / counts["total"]) * 100, 2) if counts["total"] else 0.0
+            below = pct < threshold
+            if below:
+                has_warning = True
+            subjects.append({
+                "subject_name":       subj_name,
+                "attended_periods":   counts["attended"],
+                "total_periods":      counts["total"],
+                "attendance_pct":     pct,
+                "threshold":          threshold,
+                "is_below_threshold": below,
+            })
+
+        overall_pct = round((total_attended / total_periods) * 100, 2) if total_periods else 0.0
+        students_summary.append({
+            "student_id":               sid,
+            "student_name":             None,
+            "overall_attended_periods": total_attended,
+            "overall_total_periods":    total_periods,
+            "overall_attendance_pct":   overall_pct,
+            "has_warning":              has_warning,
+            "subjects":                 subjects,
+        })
+
+    return {
+        "class_id":          class_id,
+        "section":           section,
+        "total_students":    len(students_summary),
+        "default_threshold": global_threshold,
+        "students":          students_summary,
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 1.10  Gap Record Queries
+# ══════════════════════════════════════════════════════════════════════════════
+
+def list_gaps(
+    db: Session,
+    student_id: Optional[str] = None,
+    class_id: Optional[str] = None,
+    status_filter: Optional[str] = None,
+) -> List[GapRecord]:
+    q = db.query(GapRecord).options(joinedload(GapRecord.lecture_plan))
+    if student_id:
+        q = q.filter(GapRecord.student_id == student_id)
+    if class_id:
+        q = q.filter(GapRecord.class_id == class_id)
+    if status_filter:
+        q = q.filter(GapRecord.status == status_filter)
+    return q.order_by(GapRecord.priority_score.desc(), GapRecord.date.desc()).all()
+
+
+def update_gap_status(db: Session, gap_id: uuid.UUID, new_status: str) -> GapRecord:
+    gap = db.query(GapRecord).get(gap_id)
+    if not gap:
+        raise HTTPException(status_code=404, detail="Gap record not found.")
+    gap.status = new_status
+    db.commit()
+    db.refresh(gap)
+    return gap
+

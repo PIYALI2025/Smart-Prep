@@ -9,18 +9,28 @@ Feature areas
 1.2  Attendance Marking  – mark / update / clear / calendar view
 1.3  Attendance Stats    – period-wise and overall counting
 1.4  Threshold Settings  – set / update / check threshold compliance
+1.5  Lecture Plans       – CRUD for lecture plan entries
+1.6  Roster & Bulk Mark  – session roster lookup and bulk attendance marking
+1.7  Student History     – per-student historical attendance with topic context
+1.8  Class Summary       – class-level attendance percentages vs thresholds
+1.9  Gap Records         – learning gap tracking and status management
 """
 
 from __future__ import annotations
 
 import uuid
+from datetime import date as date_type
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.auth.dependencies import get_current_user_id
+from app.auth.dependencies import (
+    get_current_user_id,
+    get_current_user_payload,
+    get_current_educator,
+)
 from app.attendance import crud, schemas
 from app.attendance.utils import (
     attendance_percentage,
@@ -258,7 +268,7 @@ def delete_extra_off_day(
     summary="Mark attendance",
     description=(
         "Record attendance for a student on a date for a specific period. "
-        "Valid marks: **present**, **absent**, **off_day**."
+        "Valid marks: **present**, **absent**, **late**, **off_day**."
     ),
 )
 def mark_attendance(
@@ -486,3 +496,219 @@ def check_threshold(
         overall_below     = overall_pct < global_threshold,
         subjects          = check_items,
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 1.5 ── Lecture Plan CRUD
+# ══════════════════════════════════════════════════════════════════════════════
+
+@router.post(
+    "/lecture-plan",
+    response_model=schemas.LecturePlanResponse,
+    status_code=201,
+    summary="Create a lecture plan entry",
+    description="Define the subject/topic for a class/section/date/period.",
+)
+def create_lecture_plan(
+    data: schemas.LecturePlanCreate,
+    db: Session = Depends(get_db),
+    _educator: dict = Depends(get_current_educator),
+):
+    return crud.create_lecture_plan(db, data)
+
+
+@router.get(
+    "/lecture-plan",
+    response_model=List[schemas.LecturePlanResponse],
+    summary="List lecture plans",
+    description="Retrieve lecture plan entries for a class/section, optionally filtered by date.",
+)
+def list_lecture_plans(
+    class_id: str = Query(...),
+    section: str = Query("A"),
+    date: Optional[date_type] = Query(None, description="Filter by date"),
+    db: Session = Depends(get_db),
+    _user: str = Depends(get_current_user_id),
+):
+    return crud.list_lecture_plans(db, class_id, section, date)
+
+
+@router.put(
+    "/lecture-plan/{plan_id}",
+    response_model=schemas.LecturePlanResponse,
+    summary="Update a lecture plan entry",
+)
+def update_lecture_plan(
+    plan_id: uuid.UUID,
+    data: schemas.LecturePlanUpdate,
+    db: Session = Depends(get_db),
+    _educator: dict = Depends(get_current_educator),
+):
+    return crud.update_lecture_plan(db, plan_id, data)
+
+
+@router.delete(
+    "/lecture-plan/{plan_id}",
+    status_code=204,
+    summary="Delete a lecture plan entry",
+)
+def delete_lecture_plan(
+    plan_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    _educator: dict = Depends(get_current_educator),
+):
+    crud.delete_lecture_plan(db, plan_id)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 1.6 ── Roster & Bulk Mark
+# ══════════════════════════════════════════════════════════════════════════════
+
+@router.get(
+    "/roster",
+    response_model=schemas.RosterResponse,
+    summary="Get session roster",
+    description=(
+        "Returns session context (class, period, lecture plan) "
+        "and the attendance status for each student in the class."
+    ),
+)
+def get_roster(
+    class_id: str = Query(...),
+    section: str = Query("A"),
+    date: date_type = Query(...),
+    period_id: uuid.UUID = Query(...),
+    student_ids: str = Query(
+        ...,
+        description="Comma-separated student IDs enrolled in this class",
+    ),
+    db: Session = Depends(get_db),
+    _educator: dict = Depends(get_current_educator),
+):
+    ids = [s.strip() for s in student_ids.split(",") if s.strip()]
+    return crud.get_roster_context(db, class_id, section, date, period_id, ids)
+
+
+@router.post(
+    "/bulk-mark",
+    response_model=schemas.BulkMarkAttendanceResponse,
+    status_code=201,
+    summary="Bulk mark attendance for a session",
+    description=(
+        "Mark attendance for all students in a period at once. "
+        "Automatically creates gap records for absent students if a lecture plan exists. "
+        "If no lecture plan, set is_unplanned=true or the request is rejected."
+    ),
+)
+def bulk_mark_attendance(
+    data: schemas.BulkMarkAttendanceRequest,
+    db: Session = Depends(get_db),
+    educator: dict = Depends(get_current_educator),
+):
+    return crud.bulk_mark_attendance(db, data, marked_by=educator.get("sub", "unknown"))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 1.7 ── Student History
+# ══════════════════════════════════════════════════════════════════════════════
+
+@router.get(
+    "/history/{student_id}",
+    response_model=schemas.StudentHistoryResponse,
+    summary="Get student attendance history",
+    description=(
+        "Returns detailed attendance history for a student with period names and topic context. "
+        "Students can only view their own history; teachers/mentors can view any student."
+    ),
+)
+def get_student_history(
+    student_id: str,
+    class_id: str = Query(...),
+    subject: Optional[str] = Query(None, description="Filter by subject"),
+    from_date: Optional[date_type] = Query(None, alias="from"),
+    to_date: Optional[date_type] = Query(None, alias="to"),
+    db: Session = Depends(get_db),
+    payload: dict = Depends(get_current_user_payload),
+):
+    # Enforce self-access for students
+    caller_id   = payload.get("sub")
+    caller_role = payload.get("role", "")
+    if caller_role == "student" and caller_id != student_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Students can only view their own attendance history.",
+        )
+
+    items = crud.get_student_history(db, student_id, class_id, subject, from_date, to_date)
+    return schemas.StudentHistoryResponse(
+        student_id    = student_id,
+        total_records = len(items),
+        records       = items,
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 1.8 ── Class Summary
+# ══════════════════════════════════════════════════════════════════════════════
+
+@router.get(
+    "/class-summary",
+    response_model=schemas.ClassAttendanceSummaryResponse,
+    summary="Class-level attendance summary",
+    description=(
+        "Returns per-subject attendance percentages for every student in a class, "
+        "checked against the configured attendance threshold."
+    ),
+)
+def get_class_summary(
+    class_id: str = Query(...),
+    section: str = Query("A"),
+    db: Session = Depends(get_db),
+    _educator: dict = Depends(get_current_educator),
+):
+    return crud.get_class_summary(db, class_id, section)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 1.9 ── Gap Records
+# ══════════════════════════════════════════════════════════════════════════════
+
+@router.get(
+    "/gaps",
+    response_model=List[schemas.GapRecordResponse],
+    summary="List gap records",
+    description=(
+        "Retrieve learning gap records. Teachers see all gaps for a class; "
+        "students see only their own."
+    ),
+)
+def list_gaps(
+    class_id: Optional[str] = Query(None),
+    student_id: Optional[str] = Query(None),
+    gap_status: Optional[str] = Query(None, description="Filter: 'unresolved' or 'reviewed'"),
+    db: Session = Depends(get_db),
+    payload: dict = Depends(get_current_user_payload),
+):
+    caller_id   = payload.get("sub")
+    caller_role = payload.get("role", "")
+
+    # Students can only query their own gaps
+    if caller_role == "student":
+        student_id = caller_id
+
+    return crud.list_gaps(db, student_id=student_id, class_id=class_id, status_filter=gap_status)
+
+
+@router.put(
+    "/gaps/{gap_id}/status",
+    response_model=schemas.GapRecordResponse,
+    summary="Update gap record status",
+    description="Mark a gap as 'reviewed' after the student has caught up on the topic.",
+)
+def update_gap_status(
+    gap_id: uuid.UUID,
+    new_status: str = Query(..., description="'unresolved' or 'reviewed'"),
+    db: Session = Depends(get_db),
+    _user: str = Depends(get_current_user_id),
+):
+    return crud.update_gap_status(db, gap_id, new_status)

@@ -1,305 +1,252 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/auth_provider.dart';
+import '../providers/attendance_provider.dart';
 import '../theme/app_theme.dart';
+import 'student_dashboard.dart';
+import 'mentor_dashboard.dart';
+import 'stats_screen.dart';
+import 'profile_screen.dart';
+import 'class_summary_screen.dart';
+import 'lecture_plan_screen.dart';
+import 'missed_lectures_screen.dart';
 
-class HomeScreen extends ConsumerWidget {
+/// Root shell with role-aware bottom navigation.
+///
+/// Student tabs: Radar | Stats | Lectures | Profile
+/// Mentor tabs:  Schedule | Students | Lectures | Profile
+class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final authState = ref.watch(authProvider);
-    final user = authState.user;
+  ConsumerState<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends ConsumerState<HomeScreen> {
+  int _sel = 0;
+
+  static const _studentTabs = [
+    _NavTab(icon: Icons.radar_outlined,        activeIcon: Icons.radar,               label: 'Radar'),
+    _NavTab(icon: Icons.bar_chart_outlined,    activeIcon: Icons.bar_chart_rounded,   label: 'Stats'),
+    _NavTab(icon: Icons.library_books_outlined,activeIcon: Icons.library_books_rounded,label: 'Lectures'),
+    _NavTab(icon: Icons.person_outline_rounded,activeIcon: Icons.person_rounded,      label: 'Profile'),
+  ];
+
+  static const _mentorTabs = [
+    _NavTab(icon: Icons.calendar_today_outlined, activeIcon: Icons.calendar_today_rounded, label: 'Schedule'),
+    _NavTab(icon: Icons.people_outline_rounded,  activeIcon: Icons.people_rounded,         label: 'Students'),
+    _NavTab(icon: Icons.library_books_outlined,  activeIcon: Icons.library_books_rounded,  label: 'Lectures'),
+    _NavTab(icon: Icons.person_outline_rounded,  activeIcon: Icons.person_rounded,         label: 'Profile'),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final user = ref.watch(authProvider).user;
+    final role = (user?.role ?? 'student').toLowerCase();
+    final isMentor = role == 'teacher' || role == 'mentor';
+    final classId = ref.watch(selectedClassIdProvider);
+    final section = ref.watch(selectedSectionProvider);
+
+    final studentBodies = <Widget>[
+      const StudentDashboard(),
+      const StatsScreen(),
+      // Students see: missed lectures tab (lecture_plan_screen in view mode)
+      const _StudentLecturesTab(),
+      const ProfileScreen(),
+    ];
+
+    final mentorBodies = <Widget>[
+      const MentorDashboard(),
+      ClassSummaryScreen(classId: classId, section: section),
+      // Mentors see: full lecture plan screen with upload tab
+      const LecturePlanScreen(),
+      const ProfileScreen(),
+    ];
+
+    final tabs = isMentor ? _mentorTabs : _studentTabs;
+    final bodies = isMentor ? mentorBodies : studentBodies;
 
     return Scaffold(
       backgroundColor: AppColors.bg,
-      appBar: AppBar(
-        backgroundColor: AppColors.surfaceSolid,
-        title: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(6),
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: AppColors.green.withValues(alpha: 0.15),
-              ),
-              child: const Icon(Icons.radar, color: AppColors.green, size: 20),
-            ),
-            const SizedBox(width: 12),
-            Text(
-              "Smart-Prep Radar",
-              style: AppTextStyles.subheading.copyWith(
-                color: AppColors.greenGlow,
-                fontSize: 18,
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.logout_rounded, color: AppColors.error),
-            tooltip: "Logout",
-            onPressed: () {
-              showDialog(
-                context: context,
-                builder: (ctx) => AlertDialog(
-                  backgroundColor: AppColors.surfaceElevated,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                    side: const BorderSide(color: AppColors.border),
-                  ),
-                  title: Text(
-                    "Confirm Disconnect",
-                    style: AppTextStyles.subheading.copyWith(fontSize: 18),
-                  ),
-                  content: Text(
-                    "Are you sure you want to end your current session?",
-                    style: AppTextStyles.body.copyWith(color: AppColors.textMuted),
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.of(ctx).pop(),
-                      child: Text(
-                        "Cancel",
-                        style: AppTextStyles.mono.copyWith(color: AppColors.textMuted),
-                      ),
-                    ),
-                    ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.error,
-                        foregroundColor: Colors.white,
-                      ),
-                      onPressed: () {
-                        Navigator.of(ctx).pop();
-                        ref.read(authProvider.notifier).logout();
-                      },
-                      child: const Text("Logout"),
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
-        ],
-      ),
+      appBar: _appBar(user, isMentor),
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // User Status Header Card
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: AppColors.surfaceSolid,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: AppColors.green.withValues(alpha: 0.3)),
-                  boxShadow: [
-                    BoxShadow(
-                      color: AppColors.green.withValues(alpha: 0.08),
-                      blurRadius: 20,
-                      spreadRadius: 2,
-                    ),
-                  ],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        CircleAvatar(
-                          radius: 26,
-                          backgroundColor: AppColors.green.withValues(alpha: 0.2),
-                          child: Text(
-                            (user?.username.isNotEmpty ?? false)
-                                ? user!.username[0].toUpperCase()
-                                : 'U',
-                            style: AppTextStyles.heading.copyWith(
-                              fontSize: 22,
-                              color: AppColors.greenGlow,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                user?.username ?? "Active User",
-                                style: AppTextStyles.subheading.copyWith(
-                                  color: AppColors.textMain,
-                                  fontSize: 20,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Row(
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 3,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: AppColors.green.withValues(alpha: 0.15),
-                                      borderRadius: BorderRadius.circular(6),
-                                      border: Border.all(
-                                        color: AppColors.green.withValues(alpha: 0.4),
-                                      ),
-                                    ),
-                                    child: Text(
-                                      (user?.role ?? 'USER').toUpperCase(),
-                                      style: AppTextStyles.monoBold.copyWith(
-                                        color: AppColors.greenGlow,
-                                        fontSize: 10,
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    "ONLINE",
-                                    style: AppTextStyles.mono.copyWith(
-                                      color: AppColors.green,
-                                      fontSize: 11,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    const Divider(color: AppColors.border),
-                    const SizedBox(height: 12),
-                    Text(
-                      "SESSION TOKEN IDENTIFIER",
-                      style: AppTextStyles.label,
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      user?.token ?? "N/A",
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppTextStyles.mono.copyWith(
-                        color: AppColors.textMuted,
-                        fontSize: 11,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-              const SizedBox(height: 24),
-
-              Text(
-                "SYSTEM MODULES",
-                style: AppTextStyles.label.copyWith(fontSize: 12),
-              ),
-              const SizedBox(height: 12),
-
-              GridView.count(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                crossAxisCount: 2,
-                crossAxisSpacing: 14,
-                mainAxisSpacing: 14,
-                childAspectRatio: 1.15,
-                children: [
-                  _buildModuleCard(
-                    icon: Icons.calendar_month_outlined,
-                    title: "Attendance",
-                    subtitle: "Routine & Records",
-                    status: "Connected",
-                    color: AppColors.green,
-                  ),
-                  _buildModuleCard(
-                    icon: Icons.radar_outlined,
-                    title: "Gap Radar",
-                    subtitle: "Analytics Matrix",
-                    status: "Active",
-                    color: AppColors.info,
-                  ),
-                  _buildModuleCard(
-                    icon: Icons.auto_graph_rounded,
-                    title: "Thresholds",
-                    subtitle: "Target: 75%",
-                    status: "Monitored",
-                    color: AppColors.warning,
-                  ),
-                  _buildModuleCard(
-                    icon: Icons.settings_suggest_outlined,
-                    title: "Settings",
-                    subtitle: "App & Hardware",
-                    status: "Ready",
-                    color: AppColors.textMuted,
-                  ),
-                ],
-              ),
-            ],
-          ),
+        child: IndexedStack(
+          index: _sel.clamp(0, bodies.length - 1),
+          children: bodies,
         ),
       ),
+      bottomNavigationBar: _bottomNav(tabs),
     );
   }
 
-  Widget _buildModuleCard({
-    required IconData icon,
-    required String title,
-    required String subtitle,
-    required String status,
-    required Color color,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceSolid,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.border),
+  PreferredSizeWidget _appBar(dynamic user, bool isMentor) => AppBar(
+    backgroundColor: AppColors.surfaceSolid,
+    elevation: 0,
+    titleSpacing: 16,
+    title: Row(children: [
+      Container(
+        padding: const EdgeInsets.all(6),
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: AppColors.green.withValues(alpha: 0.15),
+        ),
+        child: const Icon(Icons.radar, color: AppColors.green, size: 20),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Icon(icon, color: color, size: 28),
-              Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: color,
-                ),
-              ),
-            ],
+      const SizedBox(width: 10),
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('Smart-Prep',
+            style: AppTextStyles.subheading
+                .copyWith(color: AppColors.greenGlow, fontSize: 16)),
+        Text(
+          isMentor ? 'MENTOR CONSOLE' : 'STUDENT CONSOLE',
+          style: AppTextStyles.mono.copyWith(
+              color: AppColors.textMuted, fontSize: 9, letterSpacing: 1.5),
+        ),
+      ]),
+    ]),
+    actions: [
+      Container(
+        margin: const EdgeInsets.only(right: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: AppColors.surfaceElevated,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: AppColors.border),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          CircleAvatar(
+            radius: 11,
+            backgroundColor: AppColors.green.withValues(alpha: 0.2),
+            child: Text(
+              (user?.username?.isNotEmpty ?? false)
+                  ? user!.username[0].toUpperCase()
+                  : 'U',
+              style: AppTextStyles.monoBold
+                  .copyWith(fontSize: 10, color: AppColors.greenGlow),
+            ),
           ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: AppTextStyles.bodyBold.copyWith(
-                  fontSize: 15,
-                  color: AppColors.textMain,
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                subtitle,
-                style: AppTextStyles.mono.copyWith(
-                  fontSize: 11,
-                  color: AppColors.textMuted,
-                ),
-              ),
-            ],
+          const SizedBox(width: 6),
+          Text(
+            user?.username ?? 'User',
+            style: AppTextStyles.mono
+                .copyWith(color: AppColors.textMain, fontSize: 11),
           ),
+        ]),
+      ),
+    ],
+  );
+
+  Widget _bottomNav(List<_NavTab> tabs) => Container(
+    decoration: const BoxDecoration(
+      color: AppColors.surfaceSolid,
+      border: Border(top: BorderSide(color: AppColors.border, width: 1)),
+    ),
+    child: SafeArea(
+      child: Row(
+        children: tabs.asMap().entries.map((e) {
+          final i = e.key;
+          final tab = e.value;
+          final active = _sel == i;
+          return Expanded(
+            child: GestureDetector(
+              onTap: () => setState(() => _sel = i),
+              behavior: HitTestBehavior.opaque,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    height: 2,
+                    width: active ? 24 : 0,
+                    margin: const EdgeInsets.only(bottom: 6),
+                    decoration: BoxDecoration(
+                      color: AppColors.green,
+                      borderRadius: BorderRadius.circular(1),
+                    ),
+                  ),
+                  Icon(
+                    active ? tab.activeIcon : tab.icon,
+                    color: active ? AppColors.green : AppColors.textDisabled,
+                    size: 22,
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    tab.label,
+                    style: AppTextStyles.mono.copyWith(
+                      fontSize: 9,
+                      color: active ? AppColors.green : AppColors.textDisabled,
+                      fontWeight: active ? FontWeight.w700 : FontWeight.w400,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ]),
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+    ),
+  );
+}
+
+/// Student Lectures tab — combines Missed Lectures + Lecture Plan viewer.
+class _StudentLecturesTab extends ConsumerStatefulWidget {
+  const _StudentLecturesTab();
+
+  @override
+  ConsumerState<_StudentLecturesTab> createState() =>
+      _StudentLecturesTabState();
+}
+
+class _StudentLecturesTabState extends ConsumerState<_StudentLecturesTab>
+    with SingleTickerProviderStateMixin {
+  late TabController _tabs;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabs = TabController(length: 2, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _tabs.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Column(children: [
+    Container(
+      color: AppColors.surfaceSolid,
+      child: TabBar(
+        controller: _tabs,
+        labelColor: AppColors.green,
+        unselectedLabelColor: AppColors.textMuted,
+        indicatorColor: AppColors.green,
+        indicatorSize: TabBarIndicatorSize.label,
+        labelStyle: AppTextStyles.mono
+            .copyWith(fontSize: 11, fontWeight: FontWeight.w700),
+        tabs: const [
+          Tab(text: 'MISSED TOPICS'),
+          Tab(text: 'SYLLABUS'),
         ],
       ),
-    );
-  }
+    ),
+    Expanded(
+      child: TabBarView(controller: _tabs, children: [
+        const MissedLecturesScreen(),
+        const LecturePlanScreen(),
+      ]),
+    ),
+  ]);
+}
+
+class _NavTab {
+  final IconData icon, activeIcon;
+  final String label;
+  const _NavTab(
+      {required this.icon,
+      required this.activeIcon,
+      required this.label});
 }

@@ -118,3 +118,20 @@ async def get_me(
         "email": user["email"],
         "role": user["role"]
     }
+
+
+@router.get("/students")
+async def get_students():
+    """List all registered students."""
+    cursor = users_collection.find({"role": "student"})
+    students = []
+    async for user in cursor:
+        students.append({
+            "id": str(user["_id"]),
+            "username": user["username"],
+            "email": user["email"],
+            "name": user.get("name", user["username"].replace("_", " ").upper()),
+            "standard": user.get("standard", "Class 10-A")
+        })
+    return students
+

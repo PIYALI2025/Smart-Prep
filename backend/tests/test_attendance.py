@@ -32,7 +32,11 @@ from sqlalchemy.orm import sessionmaker
 # ── App imports ───────────────────────────────────────────────────────────────
 from app.main import app
 from app.core.database import Base, get_db
-from app.auth.dependencies import get_current_user_id
+from app.auth.dependencies import (
+    get_current_user_id,
+    get_current_user_payload,
+    get_current_educator,
+)
 from app.attendance.utils import (
     attendance_percentage,
     classes_needed_for_threshold,
@@ -46,15 +50,19 @@ from app.attendance.utils import (
 # Test database setup (SQLite in-memory)
 # ══════════════════════════════════════════════════════════════════════════════
 
+from sqlalchemy.pool import StaticPool
+
 SQLALCHEMY_TEST_URL = "sqlite:///:memory:"
 
 test_engine = create_engine(
     SQLALCHEMY_TEST_URL,
     connect_args={"check_same_thread": False},
+    poolclass=StaticPool,
 )
 TestingSessionLocal = sessionmaker(
     autocommit=False, autoflush=False, bind=test_engine
 )
+
 
 
 def override_get_db():
@@ -69,9 +77,19 @@ def override_get_current_user_id():
     return "test-user-uuid-1234"
 
 
+def override_get_current_user_payload():
+    return {"sub": "test-user-uuid-1234", "role": "teacher"}
+
+
+def override_get_current_educator():
+    return {"sub": "test-user-uuid-1234", "role": "teacher"}
+
+
 # Apply overrides
 app.dependency_overrides[get_db] = override_get_db
 app.dependency_overrides[get_current_user_id] = override_get_current_user_id
+app.dependency_overrides[get_current_user_payload] = override_get_current_user_payload
+app.dependency_overrides[get_current_educator] = override_get_current_educator
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -375,3 +393,247 @@ class TestStatsEndpoints:
         )
         assert r.status_code == 200
         assert r.json()["subject_name"] == "Maths"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# New Integration Tests — Lecture Plans, Bulk Mark, History, Class Summary, Gaps
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestLecturePlanCRUD:
+    plan_id: str = ""
+
+    def test_create_lecture_plan(self, client):
+        period_id = TestPeriodsCRUD.period_id
+        r = client.post("/api/v1/attendance/lecture-plan", json={
+            "class_id":       CLASS_ID,
+            "section":        "A",
+            "subject_name":   "Mathematics",
+            "period_id":      period_id,
+            "date":           "2026-08-18",
+            "teacher_id":     "teacher-001",
+            "topic":          "Quadratic Equations",
+            "subtopics":      "Factoring, Quadratic Formula",
+            "exam_weightage": 8.5,
+        })
+        assert r.status_code == 201
+        data = r.json()
+        assert data["topic"] == "Quadratic Equations"
+        assert data["subject_name"] == "Mathematics"
+        TestLecturePlanCRUD.plan_id = data["id"]
+
+    def test_list_lecture_plans(self, client):
+        r = client.get("/api/v1/attendance/lecture-plan", params={
+            "class_id": CLASS_ID,
+            "section":  "A",
+            "date":     "2026-08-18",
+        })
+        assert r.status_code == 200
+        assert len(r.json()) >= 1
+
+    def test_update_lecture_plan(self, client):
+        r = client.put(
+            f"/api/v1/attendance/lecture-plan/{self.plan_id}",
+            json={"topic": "Quadratic Equations — Advanced"},
+        )
+        assert r.status_code == 200
+        assert "Advanced" in r.json()["topic"]
+
+    def test_duplicate_lecture_plan_conflict(self, client):
+        period_id = TestPeriodsCRUD.period_id
+        r = client.post("/api/v1/attendance/lecture-plan", json={
+            "class_id":     CLASS_ID,
+            "section":      "A",
+            "subject_name": "Science",
+            "period_id":    period_id,
+            "date":         "2026-08-18",
+            "topic":        "Photosynthesis",
+        })
+        assert r.status_code == 409
+
+
+class TestBulkMarkAttendance:
+    def test_bulk_mark_rejects_without_is_unplanned(self, client):
+        """No lecture plan on 2026-08-19 → should 422 unless is_unplanned."""
+        period_id = TestPeriodsCRUD.period_id
+        r = client.post("/api/v1/attendance/bulk-mark", json={
+            "class_id":   CLASS_ID,
+            "section":    "A",
+            "date":       "2026-08-19",
+            "period_id":  period_id,
+            "records": [
+                {"student_id": STUDENT_ID, "status": "present"},
+            ],
+        })
+        assert r.status_code == 422
+
+    def test_bulk_mark_unplanned_ok(self, client):
+        """Setting is_unplanned=true allows marking without lecture plan."""
+        period_id = TestPeriodsCRUD.period_id
+        r = client.post("/api/v1/attendance/bulk-mark", json={
+            "class_id":     CLASS_ID,
+            "section":      "A",
+            "date":         "2026-08-19",
+            "period_id":    period_id,
+            "is_unplanned": True,
+            "records": [
+                {"student_id": STUDENT_ID, "status": "present"},
+            ],
+        })
+        assert r.status_code == 201
+        data = r.json()
+        assert data["total_marked"] == 1
+        assert data["present_count"] == 1
+
+    def test_bulk_mark_with_lecture_plan_creates_gaps(self, client):
+        """Bulk mark on date with lecture plan; absent students get gap records."""
+        period_id = TestPeriodsCRUD.period_id
+        r = client.post("/api/v1/attendance/bulk-mark", json={
+            "class_id":  CLASS_ID,
+            "section":   "A",
+            "date":      "2026-08-18",
+            "period_id": period_id,
+            "records": [
+                {"student_id": "student-A", "status": "present"},
+                {"student_id": "student-B", "status": "absent"},
+                {"student_id": "student-C", "status": "late"},
+            ],
+        })
+        assert r.status_code == 201
+        data = r.json()
+        assert data["total_marked"] == 3
+        assert data["present_count"] == 1
+        assert data["absent_count"] == 1
+        assert data["late_count"] == 1
+        assert "student-B" in data["absent_students"]
+        assert data["gaps_created"] >= 1
+        assert data["lecture_plan_id"] is not None
+
+    def test_bulk_mark_late_is_valid(self, client):
+        """Verify 'late' is accepted as a valid mark."""
+        period_id = TestPeriodsCRUD.period_id
+        r = client.post("/api/v1/attendance/bulk-mark", json={
+            "class_id":     CLASS_ID,
+            "section":      "A",
+            "date":         "2026-08-20",
+            "period_id":    period_id,
+            "is_unplanned": True,
+            "records": [
+                {"student_id": STUDENT_ID, "status": "late", "notes": "5 min late"},
+            ],
+        })
+        assert r.status_code == 201
+        assert r.json()["late_count"] == 1
+
+
+class TestStudentHistory:
+    def test_history_as_teacher(self, client):
+        """Teachers can view any student's history."""
+        r = client.get(
+            f"/api/v1/attendance/history/{STUDENT_ID}",
+            params={"class_id": CLASS_ID},
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["student_id"] == STUDENT_ID
+        assert isinstance(data["records"], list)
+
+    def test_history_student_self_access(self, client):
+        """
+        When payload has role=student and sub matches student_id → OK.
+        We override the payload dependency temporarily.
+        """
+        def student_payload():
+            return {"sub": STUDENT_ID, "role": "student"}
+
+        app.dependency_overrides[get_current_user_payload] = student_payload
+        try:
+            r = client.get(
+                f"/api/v1/attendance/history/{STUDENT_ID}",
+                params={"class_id": CLASS_ID},
+            )
+            assert r.status_code == 200
+        finally:
+            # Restore teacher override
+            app.dependency_overrides[get_current_user_payload] = override_get_current_user_payload
+
+    def test_history_student_cross_access_denied(self, client):
+        """Students cannot access another student's history."""
+        def student_payload():
+            return {"sub": "other-student-uuid", "role": "student"}
+
+        app.dependency_overrides[get_current_user_payload] = student_payload
+        try:
+            r = client.get(
+                f"/api/v1/attendance/history/{STUDENT_ID}",
+                params={"class_id": CLASS_ID},
+            )
+            assert r.status_code == 403
+        finally:
+            app.dependency_overrides[get_current_user_payload] = override_get_current_user_payload
+
+
+class TestClassSummary:
+    def test_class_summary(self, client):
+        r = client.get("/api/v1/attendance/class-summary", params={
+            "class_id": CLASS_ID,
+            "section":  "A",
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert data["class_id"] == CLASS_ID
+        assert "default_threshold" in data
+        assert isinstance(data["students"], list)
+
+
+class TestGapRecords:
+    def test_list_gaps(self, client):
+        r = client.get("/api/v1/attendance/gaps", params={
+            "class_id": CLASS_ID,
+        })
+        assert r.status_code == 200
+        gaps = r.json()
+        assert isinstance(gaps, list)
+        # We created at least one gap in bulk-mark test
+        assert len(gaps) >= 1
+
+    def test_list_gaps_student_filtered(self, client):
+        """Student role → only sees their own gaps."""
+        def student_payload():
+            return {"sub": "student-B", "role": "student"}
+
+        app.dependency_overrides[get_current_user_payload] = student_payload
+        try:
+            r = client.get("/api/v1/attendance/gaps", params={
+                "class_id": CLASS_ID,
+            })
+            assert r.status_code == 200
+            for gap in r.json():
+                assert gap["student_id"] == "student-B"
+        finally:
+            app.dependency_overrides[get_current_user_payload] = override_get_current_user_payload
+
+    def test_update_gap_status(self, client):
+        # Get a gap to update
+        r = client.get("/api/v1/attendance/gaps", params={"class_id": CLASS_ID})
+        gaps = r.json()
+        assert len(gaps) >= 1
+        gap_id = gaps[0]["id"]
+
+        r = client.put(
+            f"/api/v1/attendance/gaps/{gap_id}/status",
+            params={"new_status": "reviewed"},
+        )
+        assert r.status_code == 200
+        assert r.json()["status"] == "reviewed"
+
+    def test_delete_lecture_plan_cascades_gaps(self, client):
+        """Deleting a lecture plan should cascade-delete its gap records."""
+        plan_id = TestLecturePlanCRUD.plan_id
+        r = client.delete(f"/api/v1/attendance/lecture-plan/{plan_id}")
+        assert r.status_code == 204
+
+        # Gaps linked to that plan should be gone
+        r = client.get("/api/v1/attendance/gaps", params={"class_id": CLASS_ID})
+        for gap in r.json():
+            assert gap["lecture_plan_id"] != plan_id
+

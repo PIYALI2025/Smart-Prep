@@ -1,0 +1,94 @@
+name: gap_radar
+description: "Gap Radar - Smart Exam Prep System (Student + Teacher app)"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # ---------- State Management ----------
+  flutter_riverpod: ^2.5.1
+  riverpod_annotation: ^2.3.5
+
+  # ---------- Navigation / Routing ----------
+  go_router: ^14.2.7
+
+  # ---------- Networking ----------
+  dio: ^5.5.0+1
+  http: ^1.2.2
+
+  # ---------- Backend / Auth (if using Supabase) ----------
+  supabase_flutter: ^2.6.0
+
+  # ---------- Firebase (Push Notifications) ----------
+  firebase_core: ^3.4.1
+  firebase_messaging: ^15.1.0
+  flutter_local_notifications: ^17.2.3
+
+  # ---------- Offline Storage / Caching ----------
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+  sqflite: ^2.3.3+1
+  path_provider: ^2.1.4
+  shared_preferences: ^2.3.2
+  connectivity_plus: ^6.0.5
+
+  # ---------- UI / Design (Radar Console theme) ----------
+  google_fonts: ^6.2.1
+  flutter_svg: ^2.0.10+1
+  flutter_animate: ^4.5.0
+  shimmer: ^3.0.0
+  percent_indicator: ^4.2.3
+
+  # ---------- Charts / Radar Visualization ----------
+  fl_chart: ^0.69.0
+
+  # ---------- Utilities ----------
+  intl: ^0.19.0
+  uuid: ^4.5.0
+  equatable: ^2.0.5
+  logger: ^2.4.0
+  freezed_annotation: ^2.4.4
+  json_annotation: ^4.9.0
+
+  # ---------- Voice Input (Explain-It-Back feature) ----------
+  speech_to_text: ^7.0.0
+
+  # ---------- Icons ----------
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  # ---------- Code Generation ----------
+  build_runner: ^2.4.13
+  json_serializable: ^6.8.0
+
+  # ---------- Linting ----------
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/images/
+    - assets/icons/
+    - assets/fonts/
+
+  # ---------- Fonts (Managed dynamically via google_fonts package) ----------
+  # fonts:
+  #   - family: SpaceGrotesk
+  #     fonts:
+  #       - asset: assets/fonts/SpaceGrotesk-Regular.ttf
+  #       - asset: assets/fonts/SpaceGrotesk-Bold.ttf
+  #         weight: 700
+  #   - family: JetBrainsMono
+  #     fonts:
+  #       - asset: assets/fonts/JetBrainsMono-Regular.ttf
+  #       - asset: assets/fonts/JetBrainsMono-Medium.ttf
+  #         weight: 500

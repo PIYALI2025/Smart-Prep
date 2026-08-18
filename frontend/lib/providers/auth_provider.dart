@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/user_model.dart';
 import '../services/auth_service.dart';
@@ -37,53 +38,33 @@ class AuthNotifier extends StateNotifier<AuthState> {
   AuthNotifier({AuthService? authService})
       : _authService = authService ?? AuthService(),
         super(const AuthState(isLoading: true)) {
-    checkAuthStatus();
+    _checkAuthStatus();
   }
 
-  Future<void> checkAuthStatus() async {
-    state = state.copyWith(isLoading: true);
+  Future<void> _checkAuthStatus() async {
     final storedUser = await _authService.getStoredUser();
     if (storedUser != null) {
-      state = AuthState(
-        isLoading: false,
-        isAuthenticated: true,
-        user: storedUser,
-      );
+      state = AuthState(isLoading: false, isAuthenticated: true, user: storedUser);
     } else {
-      state = const AuthState(
-        isLoading: false,
-        isAuthenticated: false,
-      );
+      state = const AuthState(isLoading: false, isAuthenticated: false);
     }
   }
 
-  Future<bool> login(String username, String accessKey) async {
+  Future<bool> login(String email, String password) async {
     state = state.copyWith(isLoading: true, clearError: true);
-
     try {
-      if (username.isEmpty || accessKey.isEmpty) {
-        state = state.copyWith(
-          isLoading: false,
-          errorMessage: 'Username and access key are required.',
-        );
-        return false;
-      }
-
-      final user = await _authService.login(
-        username: username,
-        accessKey: accessKey,
-      );
-
-      state = AuthState(
-        isLoading: false,
-        isAuthenticated: true,
-        user: user,
-      );
+      final user = await _authService.login(email: email, password: password);
+      state = AuthState(isLoading: false, isAuthenticated: true, user: user);
       return true;
-    } catch (e) {
+    } on DioException catch (e) {
+      final detail = e.response?.data?['detail']?.toString() ??
+          'Login failed. Check your credentials.';
+      state = state.copyWith(isLoading: false, errorMessage: detail);
+      return false;
+    } catch (_) {
       state = state.copyWith(
         isLoading: false,
-        errorMessage: 'Authentication failed. Please check credentials.',
+        errorMessage: 'An unexpected error occurred.',
       );
       return false;
     }
@@ -92,11 +73,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
   Future<void> logout() async {
     state = state.copyWith(isLoading: true);
     await _authService.logout();
-    state = const AuthState(
-      isLoading: false,
-      isAuthenticated: false,
-      user: null,
-    );
+    state = const AuthState(isLoading: false, isAuthenticated: false);
   }
 
   void clearError() {
@@ -106,9 +83,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }
 }
 
-final authServiceProvider = Provider<AuthService>((ref) {
-  return AuthService();
-});
+final authServiceProvider = Provider<AuthService>((ref) => AuthService());
 
 final authProvider = StateNotifierProvider<AuthNotifier, AuthState>((ref) {
   final authService = ref.watch(authServiceProvider);

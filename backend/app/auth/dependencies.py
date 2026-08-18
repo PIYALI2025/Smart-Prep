@@ -101,5 +101,62 @@ async def get_current_mentor(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Mentor access required"
         )
-
     return user
+
+
+# ---------------------------------------------------------
+# JWT PAYLOAD EXTRACTION (lightweight, no DB lookup)
+# ---------------------------------------------------------
+
+def get_current_user_payload(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+) -> dict:
+    """
+    Decode the JWT and return the full payload dict.
+    Useful when you need the user's role without a DB round-trip.
+    Payload is expected to contain at minimum: sub, role.
+    """
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    try:
+        payload = jwt.decode(
+            credentials.credentials,
+            settings.SECRET_KEY,
+            algorithms=[settings.ALGORITHM],
+        )
+        if payload.get("sub") is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token payload",
+            )
+        return payload
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+# ---------------------------------------------------------
+# EDUCATOR (TEACHER / MENTOR) AUTHORIZATION — no DB lookup
+# ---------------------------------------------------------
+
+def get_current_educator(
+    payload: dict = Depends(get_current_user_payload),
+) -> dict:
+    """
+    Require the caller to have role 'teacher' or 'mentor'.
+    Returns the full JWT payload on success.
+    """
+    role = payload.get("role", "")
+    if role not in ("teacher", "mentor"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Teacher or Mentor access required.",
+        )
+    return payload

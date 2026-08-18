@@ -150,7 +150,7 @@ class ExtraOffDayResponse(OrmBase):
 # 1.2 — Attendance Marking
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VALID_MARKS = {"present", "absent", "off_day"}
+VALID_MARKS = {"present", "absent", "late", "off_day"}
 
 
 class AttendanceMarkCreate(BaseModel):
@@ -265,3 +265,178 @@ class ThresholdCheckResponse(BaseModel):
     global_threshold: float
     overall_below: bool
     subjects: List[ThresholdCheckItem]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 1.5 — Lecture Plan Entries
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class LecturePlanCreate(BaseModel):
+    class_id: str              = Field(..., min_length=1, max_length=64, examples=["CLASS-10A"])
+    section: str               = Field("A", min_length=1, max_length=16, examples=["A"])
+    subject_name: str          = Field(..., min_length=1, max_length=128, examples=["Mathematics"])
+    period_id: uuid.UUID
+    date: date
+    teacher_id: Optional[str]  = Field(None, max_length=64)
+    topic: str                 = Field(..., min_length=1, max_length=256, examples=["Quadratic Equations"])
+    subtopics: Optional[str]   = Field(None, max_length=512, examples=["Factoring, Quadratic Formula"])
+    exam_weightage: float      = Field(5.0, ge=0.0, le=100.0, examples=[8.5])
+
+
+class LecturePlanUpdate(BaseModel):
+    topic: Optional[str]            = Field(None, min_length=1, max_length=256)
+    subtopics: Optional[str]        = Field(None, max_length=512)
+    exam_weightage: Optional[float] = Field(None, ge=0.0, le=100.0)
+    teacher_id: Optional[str]       = Field(None, max_length=64)
+
+
+class LecturePlanResponse(OrmBase):
+    id: uuid.UUID
+    class_id: str
+    section: str
+    subject_name: str
+    period_id: uuid.UUID
+    date: date
+    teacher_id: Optional[str]
+    topic: str
+    subtopics: Optional[str]
+    exam_weightage: float
+    created_at: Optional[object] = None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 1.6 — Gap Records
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class GapRecordResponse(OrmBase):
+    id: uuid.UUID
+    student_id: str
+    lecture_plan_id: uuid.UUID
+    class_id: str
+    subject_name: str
+    date: date
+    period_id: uuid.UUID
+    reason: str
+    priority_score: float
+    status: str
+    created_at: Optional[object] = None
+    lecture_plan: Optional[LecturePlanResponse] = None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 1.7 — Roster & Session Context
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class RosterStudentItem(BaseModel):
+    student_id: str
+    name: Optional[str] = None
+    status: str = Field("unmarked", examples=["present", "absent", "late", "unmarked"])
+    record_id: Optional[uuid.UUID] = None
+    notes: Optional[str] = None
+
+
+class RosterSessionInfo(BaseModel):
+    class_id: str
+    section: str
+    date: date
+    period_id: uuid.UUID
+    period_name: Optional[str] = None
+    subject_name: Optional[str] = None
+    lecture_plan: Optional[LecturePlanResponse] = None
+
+
+class RosterResponse(BaseModel):
+    session_info: RosterSessionInfo
+    total_students: int
+    students: List[RosterStudentItem]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 1.8 — Bulk Marking
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class StudentMarkItem(BaseModel):
+    student_id: str = Field(..., min_length=1, max_length=64)
+    status: str     = Field(..., examples=["present", "absent", "late"])
+    notes: Optional[str] = Field(None, max_length=256)
+
+    @field_validator("status")
+    @classmethod
+    def valid_status(cls, v: str) -> str:
+        if v.lower() not in VALID_MARKS:
+            raise ValueError(f"status must be one of {VALID_MARKS}")
+        return v.lower()
+
+
+class BulkMarkAttendanceRequest(BaseModel):
+    class_id: str              = Field(..., min_length=1, max_length=64)
+    section: str               = Field("A", min_length=1, max_length=16)
+    date: date
+    period_id: uuid.UUID
+    subject_name: Optional[str]= Field(None, max_length=128)
+    is_unplanned: bool         = Field(False, description="Flag as unplanned/free period if no lecture plan exists")
+    records: List[StudentMarkItem]
+
+
+class BulkMarkAttendanceResponse(BaseModel):
+    class_id: str
+    section: str
+    date: date
+    period_id: uuid.UUID
+    total_marked: int
+    present_count: int
+    absent_count: int
+    late_count: int
+    absent_students: List[str]
+    gaps_created: int
+    lecture_plan_id: Optional[uuid.UUID] = None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 1.9 — Student History & Class Summary
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class StudentHistoryItem(BaseModel):
+    id: uuid.UUID
+    date: date
+    period_id: uuid.UUID
+    period_name: Optional[str] = None
+    subject_name: str
+    topic: Optional[str] = None
+    mark: str
+    marked_by: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class StudentHistoryResponse(BaseModel):
+    student_id: str
+    total_records: int
+    records: List[StudentHistoryItem]
+
+
+class StudentSubjectAttendance(BaseModel):
+    subject_name: str
+    attended_periods: int
+    total_periods: int
+    attendance_pct: float
+    threshold: float
+    is_below_threshold: bool
+
+
+class ClassStudentSummaryItem(BaseModel):
+    student_id: str
+    student_name: Optional[str] = None
+    overall_attended_periods: int
+    overall_total_periods: int
+    overall_attendance_pct: float
+    has_warning: bool
+    subjects: List[StudentSubjectAttendance]
+
+
+class ClassAttendanceSummaryResponse(BaseModel):
+    class_id: str
+    section: Optional[str] = None
+    total_students: int
+    default_threshold: float
+    students: List[ClassStudentSummaryItem]
+

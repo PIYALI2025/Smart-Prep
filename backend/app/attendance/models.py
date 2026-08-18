@@ -73,6 +73,7 @@ class DayOfWeek(str, enum.Enum):
 class AttendanceMark(str, enum.Enum):
     PRESENT  = "present"
     ABSENT   = "absent"
+    LATE     = "late"
     OFF_DAY  = "off_day"    # holiday / off – doesn't count against student
 
 
@@ -259,3 +260,83 @@ class AttendanceThreshold(Base):
         return (f"<AttendanceThreshold class={self.class_id} "
                 f"scope={self.scope} subject={self.subject_name} "
                 f"threshold={self.threshold}>")
+
+
+# ─────────────────────────── Table 7: Lecture Plan Entries ────────────────────
+
+class LecturePlanEntry(Base):
+    """
+    Represents one subject + topic taught in one period on one date by one teacher.
+    Includes subtopics covered and an exam-weightage indicator for gap prioritization.
+    """
+    __tablename__ = "lecture_plan_entries"
+
+    id             = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    class_id       = Column(String(64), nullable=False, index=True)
+    section        = Column(String(16), nullable=False, default="A", index=True)
+    subject_name   = Column(String(128), nullable=False, index=True)
+    period_id      = Column(UUID(),
+                            ForeignKey("timetable_periods.id", ondelete="CASCADE"),
+                            nullable=False)
+    date           = Column(Date, nullable=False, index=True)
+    teacher_id     = Column(String(64), nullable=True)
+    topic          = Column(String(256), nullable=False)
+    subtopics      = Column(String(512), nullable=True)
+    exam_weightage = Column(Float, nullable=False, default=5.0)  # e.g., 1.0 - 10.0 scale or %
+    created_at     = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at     = Column(DateTime, default=datetime.utcnow,
+                            onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("class_id", "section", "date", "period_id",
+                         name="uq_lecture_plan_class_sec_date_period"),
+    )
+
+    period = relationship("TimetablePeriod")
+    gaps   = relationship("GapRecord", back_populates="lecture_plan",
+                          cascade="all, delete-orphan")
+
+    def __repr__(self) -> str:
+        return (f"<LecturePlanEntry {self.class_id}-{self.section} {self.subject_name} "
+                f"{self.date} P={self.period_id} topic={self.topic}>")
+
+
+# ─────────────────────────── Table 8: Gap Records ────────────────────────────
+
+class GapRecord(Base):
+    """
+    Created automatically when a student is marked absent for a period with a linked
+    lecture-plan entry. Tracks learning gaps, priority scores, and review status.
+    """
+    __tablename__ = "gap_records"
+
+    id              = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    student_id      = Column(String(64), nullable=False, index=True)
+    lecture_plan_id = Column(UUID(),
+                             ForeignKey("lecture_plan_entries.id", ondelete="CASCADE"),
+                             nullable=False)
+    class_id        = Column(String(64), nullable=False, index=True)
+    subject_name    = Column(String(128), nullable=False)
+    date            = Column(Date, nullable=False)
+    period_id       = Column(UUID(),
+                             ForeignKey("timetable_periods.id", ondelete="CASCADE"),
+                             nullable=False)
+    reason          = Column(String(64), nullable=False, default="absence")
+    priority_score  = Column(Float, nullable=False, default=5.0)
+    status          = Column(String(32), nullable=False, default="unresolved")  # unresolved | reviewed
+    created_at      = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at      = Column(DateTime, default=datetime.utcnow,
+                             onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("student_id", "lecture_plan_id",
+                         name="uq_gap_student_lecture_plan"),
+    )
+
+    lecture_plan = relationship("LecturePlanEntry", back_populates="gaps")
+    period       = relationship("TimetablePeriod")
+
+    def __repr__(self) -> str:
+        return (f"<GapRecord student={self.student_id} lecture_plan={self.lecture_plan_id} "
+                f"score={self.priority_score} status={self.status}>")
+
